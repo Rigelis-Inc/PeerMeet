@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MiniZoom video room.">
+  <meta name="theme-color" content="#14100B">
+  <% const _title = (typeof event !== 'undefined' && event) ? event.title : roomId; %>
+  <title>MiniZoom · <%= _title %></title>
+  <script>
+    <% const _js = (v) => JSON.stringify(v).replace(/</g, '\\u003c'); %>
+    const ROOM_ID = <%- _js(roomId) %>;
+    const USER_NAME = <%- _js(userName) %>;
+    const EVENT_ID = <%- _js(typeof event !== 'undefined' && event ? event.id : null) %>;
+    const IS_HOST = <%- _js(typeof isHost !== 'undefined' ? !!isHost : false) %>;
+    const HOST_KEY = <%- _js(typeof pageKey !== 'undefined' && pageKey ? pageKey : null) %>;
+    const SCREEN_FILES = <%- _js(typeof event !== 'undefined' && event && event.files ? event.files : []) %>;
+    const GUEST_VIEW = <%- _js(typeof guestView !== 'undefined' ? !!guestView : false) %>;
+  </script>
+  <script defer src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="/vendor/jszip.min.js"></script>
+  <script src="/vendor/docx-preview.min.js"></script>
+  <script src="/socket.io/socket.io.js" defer></script>
+  <script src="/script.js?v=20261006" defer></script>
+  <link rel="stylesheet" href="/style.css?v=20261006">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+</head>
+<body class="room">
+  <% const _event = typeof event !== 'undefined' ? event : null; %>
+  <% const _isHost = typeof isHost !== 'undefined' ? !!isHost : false; %>
+  <% const _files = (_event && _event.files) || []; %>
+  <% const fileIcon = (f) => { const m = f.mime || ''; const n = f.originalName || ''; if (m === 'application/pdf' || /\.pdf$/i.test(n)) return '📕'; if (m === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || /\.docx$/i.test(n)) return '📝'; if (/presentation|powerpoint/.test(m) || /\.pptx?$/i.test(n)) return '📊'; if (/spreadsheet|excel/.test(m) || /\.xlsx?$/i.test(n)) return '📗'; if (m.startsWith('image/')) return '🖼️'; if (m.startsWith('video/')) return '🎬'; if (m.startsWith('audio/')) return '🎵'; if (/zip|compressed|rar/.test(m) || /\.zip$/i.test(n)) return '📦'; if (m.startsWith('text/') || /\.txt$/i.test(n)) return '📃'; return '📎'; }; %>
+  <% const fileType = (f) => { const n = f.originalName || ''; const parts = n.split('.'); const ext = parts.length > 1 ? parts.pop().toUpperCase().slice(0, 4) : ''; return ext || 'FILE'; }; %>
+  <% const _isUploader = (f) => userName !== 'Guest' && ((f.uploadedBy || (_event && _event.host) || 'Guest') === userName); %>
+  <a class="skip" href="#roomMain">Skip to meeting content</a>
+  <header class="room-bar">
+    <span class="brand"><span class="logo">◉</span>MiniZoom</span>
+    <% if (_event) { %>
+      <span class="chip event-chip" title="Scheduled event: <%= _event.title %> (host: <%= _event.host %>)">📅&nbsp;<strong><%= _event.title %></strong>&nbsp;· <%= _event.host %></span>
+    <% } %>
+    <span class="chip" title="Your display name">You · <strong><%= userName %></strong><% if (_isHost) { %>&nbsp;<span class="crown" title="You are the event host">👑</span><% } %></span>
+    <span class="chip" title="Participants"><span class="dot" aria-hidden="true"></span>&nbsp;<span id="count">1 in call</span></span>
+    <span class="spacer"></span>
+    <a class="leave" href="/lobby?name=<%= encodeURIComponent(userName) %><% if (typeof pageKey !== 'undefined' && pageKey) { %>&hostKey=<%= encodeURIComponent(pageKey) %><% } %>">← Leave</a>
+  </header>
+  <div class="room-body">
+    <main class="room-main" id="roomMain">
+      <section class="video-panel" aria-label="Video call">
+        <div class="panel-head">
+          <h2><span aria-hidden="true">🎥</span> On camera</h2>
+          <span class="panel-hint">Tiles update live as people join</span>
+        </div>
+        <div id="video-grid"></div>
+      </section>
+      <% if (_event) { %>
+      <section class="stage" id="stage" aria-label="Live document preview">
+        <div class="panel-head">
+          <h2><span aria-hidden="true">🖥️</span> Live preview</h2>
+          <span class="stage-doc" id="stageDoc">Nothing presenting yet</span>
+          <span class="spacer"></span>
+          <% if (_isHost) { %>
+            <span class="host-badge">👑</span>
+          <% } else { %>
+            <span class="viewer-badge">👁 <%= _event.host %></span>
+          <% } %>
+        </div>
+        <div class="stage-body" id="stageBody">
+          <p class="sub-dim" id="stagePlaceholder"><%= _isHost ? 'Pick a file on the right and press Present — everyone will follow your pages.' : 'Waiting for the host to start a preview…' %></p>
+          <canvas id="pdfCanvas" hidden></canvas>
+          <img id="stageImg" hidden alt="Document preview">
+          <iframe id="stageFrame" hidden title="Document preview"></iframe>
+          <div id="stageDocx" class="docx-stage" hidden></div>
+        </div>
+        <div class="stage-controls">
+          <% if (_isHost) { %>
+            <button type="button" id="prevPage" disabled aria-label="Previous page">← Prev</button>
+            <span class="page-ind" id="pageInd" role="status">No doc</span>
+            <button type="button" id="nextPage" disabled aria-label="Next page">Next →</button>
+            <button type="button" id="stopPresent" class="danger" disabled>■ Stop</button>
+            <span class="swipe-hint" id="swipeHint" hidden>slide sideways to turn pages </span>
+          <% } else { %>
+            <span class="page-ind" id="pageInd">Follows host</span>
+          <% } %>
+        </div>
+      </section>
+      <% } %>
+    </main>
+    <aside class="screen-files" aria-label="Files to screen in this event">
+      <div class="panel-head">
+        <h2><span aria-hidden="true">📎</span> Files to screen</h2>
+        <span class="count-pill" title="<%= _files.length %> file(s) attached"><%= _files.length %></span>
+      </div>
+      <% if (!_event) { %>
+        <p class="sub-dim">Ad-hoc room — files appear here when you join via a scheduled event. <a href="/lobby?name=<%= encodeURIComponent(userName) %>">Create an event with files</a>.</p>
+      <% } else if (!_files.length) { %>
+        <div class="empty-state">
+          <p class="empty-emoji" aria-hidden="true">📭</p>
+          <p class="sub-dim">No screening files yet. Upload below — everyone in this room can preview &amp; save them.</p>
+        </div>
+      <% } else { %>
+        <ul class="screen-file-list">
+          <% _files.forEach(f => { %>
+            <li data-file-id="<%= f.id %>">
+              <div class="sf-top">
+                <span class="file-icon" role="img" aria-label="File"><%= fileIcon(f) %></span>
+                <div class="sf-info">
+                  <span class="sf-name" title="<%= f.originalName %>"><%= f.originalName %></span>
+                  <span class="sf-meta">
+                    <span class="live-pill" data-live-pill hidden>LIVE</span>
+                    <span class="type-tag" title="Document type: <%= fileType(f) %>"><%= fileType(f) %></span>
+                    <span class="sf-size"><%= f.size > 1048576 ? (f.size/1048576).toFixed(1)+' MB' : Math.max(1, Math.round(f.size/1024))+' KB' %></span>
+                  </span>
+                </div>
+              </div>
+            <div class="sf-actions">
+              <% if (_isHost) { %>
+                <button type="button" class="sf-btn present-btn" data-file-id="<%= f.id %>">▶ Present</button>
+              <% } %>
+              <a class="sf-btn" href="/uploads/<%= encodeURIComponent(f.storedName) %>" target="_blank" rel="noopener">Open</a>
+              <a class="sf-btn primary" href="/events/<%= _event.id %>/files/<%= f.id %>" download>⬇ Save</a>
+              <% if (_isHost || _isUploader(f)) { %>
+                <form method="POST" class="needs-confirm" style="flex:1 1 90px;min-width:0;display:flex" data-confirm-title="Remove this file?" data-confirm-text="Remove <%= f.originalName %> from this event?" data-confirm-yes="Remove" action="/events/<%= _event.id %>/files/<%= f.id %>/remove?name=<%= encodeURIComponent(userName) %><% if (typeof pageKey !== 'undefined' && pageKey) { %>&hostKey=<%= encodeURIComponent(pageKey) %><% } %>&returnTo=<%= encodeURIComponent('/' + roomId + '?name=' + encodeURIComponent(userName) + ((typeof pageKey !== 'undefined' && pageKey) ? '&hostKey=' + encodeURIComponent(pageKey) : '')) %>">
+                  <button type="submit" class="sf-btn remove" style="flex:1" title="Remove <%= f.originalName %>">✕ Remove</button>
+                </form>
+              <% } %>
+            </div>
+            <% if (_isUploader(f)) { %>
+              <p class="own-hint">⬆ Uploaded by you</p>
+            <% } %>
+            <% if (_isHost) { %>
+              <p class="present-hint">Present streams this file to everyone — you turn the pages.</p>
+            <% } %>
+            </li>
+          <% }) %>
+        </ul>
+      <% } %>
+      <% if (_event) { %>
+        <div class="upload-box">
+          <h3><%= _files.length ? 'Add another file' : 'Upload the first file' %></h3>
+          <form class="sf-upload" method="POST" action="/events/<%= _event.id %>/files?name=<%= encodeURIComponent(userName) %>&returnTo=<%= encodeURIComponent('/' + roomId + '?name=' + encodeURIComponent(userName) + ((typeof pageKey !== 'undefined' && pageKey) ? '&hostKey=' + encodeURIComponent(pageKey) : '')) %>" enctype="multipart/form-data">
+            <input type="file" name="screenFiles" multiple aria-label="Upload files to screen in this room">
+            <button type="submit">⬆ Upload to screen</button>
+          </form>
+        </div>
+      <% } %>
+    </aside>
+  </div>
+  <footer class="controls" aria-label="Call controls">
+    <button id="muteBtn" type="button" aria-pressed="false">🎙 Mute microphone</button>
+    <button id="videoBtn" type="button" aria-pressed="false">📹 Stop video</button>
+  </footer>
+  <div class="modal-backdrop" id="confirmBackdrop" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle"></h2>
+      <p class="sub" id="confirmText"></p>
+      <div class="row">
+        <button type="button" class="secondary" id="confirmNo">Keep</button>
+        <button type="button" class="btn-danger" id="confirmYes">Confirm</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const backdrop = document.getElementById('confirmBackdrop');
+      if (!backdrop) return;
+      const titleEl = document.getElementById('confirmTitle');
+      const textEl = document.getElementById('confirmText');
+      const yesBtn = document.getElementById('confirmYes');
+      const noBtn = document.getElementById('confirmNo');
+      let pending = null;
+      const close = () => { backdrop.hidden = true; pending = null; };
+      noBtn.addEventListener('click', close);
+      backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && !backdrop.hidden) close(); });
+      document.querySelectorAll('form.needs-confirm').forEach(f => {
+        f.addEventListener('submit', e => {
+          e.preventDefault();
+          titleEl.textContent = f.dataset.confirmTitle || 'Are you sure?';
+          textEl.textContent = f.dataset.confirmText || '';
+          yesBtn.textContent = f.dataset.confirmYes || 'Confirm';
+          pending = f;
+          backdrop.hidden = false;
+          yesBtn.focus();
+        });
+      });
+      yesBtn.addEventListener('click', () => { if (pending) pending.submit(); });
+    })();
+  </script>
+</body>
+</html>

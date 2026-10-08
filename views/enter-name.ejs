@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MiniZoom — enter your display name to join.">
+  <title>CampusMeet — Enter your name</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+</head>
+<body>
+  <main class="page">
+    <nav class="topnav" aria-label="Primary">
+      <span class="brand"><span class="logo">◉</span><span>CampusMeet<small>Video rooms</small></span></span>
+      <span class="spacer"></span>
+      <a class="navlink" href="/">&larr; Home</a>
+    </nav>
+    <div class="card">
+      <span class="eyebrow">Joining event</span>
+      <% if (typeof event !== 'undefined' && event) { %>
+      <h1>Join <%= event.title %>.</h1>
+      <p class="sub">Hosted by <strong><%= event.host %></strong> · room <code><%= roomId %></code>. Enter your display name to join.</p>
+      <% } else { %>
+      <h1>Join <%= roomId %>.</h1>
+      <p class="sub">Enter your display name to join.</p>
+      <% } %>
+      <form method="GET" action="/<%= encodeURIComponent(roomId) %>">
+        <% if (typeof hostKey !== 'undefined' && hostKey) { %>
+        <input type="hidden" name="hostKey" value="<%= hostKey %>">
+        <% } %>
+        <% if (typeof guestView !== 'undefined' && guestView) { %>
+        <input type="hidden" name="guest" value="1">
+        <% } %>
+        <label class="field" for="name">
+          Display name
+          <input id="name" name="name" type="text" maxlength="20" placeholder="e.g. Ada Lovelace" autocomplete="name" required>
+        </label>
+        <div class="row">
+          <button type="submit" style="flex:1">Join now →</button>
+        </div>
+      </form>
+      <p id="err" class="err" role="alert"></p>
+    </div>
+  </main>
+  <script>
+    document.getElementById('name').focus();
+  </script>
+</body>
+</html>

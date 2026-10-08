@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CampusMeet — something went wrong.">
+  <title>CampusMeet — <%= status %></title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+</head>
+<body>
+  <main class="page">
+    <nav class="topnav" aria-label="Primary">
+      <span class="brand"><span class="logo">◉</span><span>CampusMeet<small>Video rooms</small></span></span>
+      <span class="spacer"></span>
+      <a class="navlink" href="/">&larr; Home</a>
+    </nav>
+    <div class="card">
+      <span class="eyebrow">Something went wrong</span>
+      <h1><%= heading %></h1>
+      <p class="sub"><%= message %></p>
+      <div class="row">
+        <a class="btn" href="<%= backHref %>" style="flex:1;text-decoration:none"><%= backLabel %></a>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

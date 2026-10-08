@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MiniZoom lobby — join a scheduled event or create a new one.">
+  <meta name="theme-color" content="#1C130D">
+  <title>MiniZoom — Lobby</title>
+  <link rel="stylesheet" href="/style.css?v=20261006">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+</head>
+<body>
+  <main class="page">
+    <nav class="topnav" aria-label="Primary">
+      <span class="brand"><span class="logo">◉</span><span>CampusMeet<small>Video rooms</small></span></span>
+      <span class="spacer"></span>
+      <span class="navlink">👋 <%= userName %></span>
+      <a class="navlink" href="/">&larr; Back</a>
+    </nav>
+    <div class="card wide">
+      <span class="eyebrow">Lobby</span>
+      <h1>Welcome, <%= userName %>.</h1>
+      <p class="sub">Join a scheduled event below, or create your own. All times shown in your timezone (<strong id="tz">…</strong>).</p>
+      <% const liveCount = events.filter(e => occupancy[e.roomId]).length; %>
+      <% const fileCount = events.reduce((n, e) => n + ((e.files || []).length), 0); %>
+      <div class="stat-row" aria-label="Lobby overview">
+        <span class="stat">📅 <strong><%= events.length %></strong> events</span>
+        <span class="stat">🟢 <strong><%= liveCount %></strong> live now</span>
+        <span class="stat">📎 <strong><%= fileCount %></strong> files to screen</span>
+      </div>
+
+      <h2 class="section-title">Scheduled events</h2>
+      <section class="events" aria-label="Scheduled events">
+        <% const fileIcon = (f) => { const m = f.mime || ''; const n = f.originalName || ''; if (m === 'application/pdf' || /\.pdf$/i.test(n)) return '📕'; if (m === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || /\.docx$/i.test(n)) return '📝'; if (/presentation|powerpoint/.test(m) || /\.pptx?$/i.test(n)) return '📊'; if (/spreadsheet|excel/.test(m) || /\.xlsx?$/i.test(n)) return '📗'; if (m.startsWith('image/')) return '🖼️'; if (m.startsWith('video/')) return '🎬'; if (m.startsWith('audio/')) return '🎵'; if (/zip|compressed|rar/.test(m) || /\.zip$/i.test(n)) return '📦'; if (m.startsWith('text/') || /\.txt$/i.test(n)) return '📃'; return '📎'; }; %>
+        <% const fileType = (f) => { const n = f.originalName || ''; const parts = n.split('.'); const ext = parts.length > 1 ? parts.pop().toUpperCase().slice(0, 4) : ''; return ext || 'FILE'; }; %>
+        <% events.forEach(e => { %>
+          <% const mine = (typeof hostOf !== 'undefined' && hostOf[e.id]); %>
+          <% const inCall = occupancy[e.roomId]; %>
+          <article class="event<%= mine ? ' is-host' : '' %><%= inCall ? ' is-live' : '' %>">
+            <div class="event-top">
+              <h2><%= e.title %></h2>
+              <% if (mine) { %><span class="host-pill" title="You created this event">👑 HOST</span><% } %>
+            </div>
+            <p class="meta-row">Hosted by <strong>&nbsp;<%= e.host %></strong> · <%= e.durationMin %> min</p>
+            <p class="meta-row">🕒 <time data-utc="<%= e.startsAtUTC %>"><%= e.startsAtUTC %></time></p>
+            <p class="meta-row"><code><%= e.roomId %></code>
+              <% if (inCall) { %>
+                <span class="live"><i></i><%= inCall %> in call</span>
+              <% } else { %>
+                <span class="pill">Available</span>
+              <% } %>
+            </p>
+            <a class="btn" href="/<%= e.roomId %>?name=<%= encodeURIComponent(userName) %><% if (typeof hostKeyOf !== 'undefined' && hostKeyOf[e.id]) { %>&hostKey=<%= encodeURIComponent(hostKeyOf[e.id]) %><% } %>"><% if (mine) { %>▶ Join as host<% } else if (inCall) { %>Join live event →<% } else { %>Join event →<% } %></a>
+            <% if (mine) { %>
+            <button type="button" class="secondary copy-invite" data-room="<%= e.roomId %>" data-title="<%= e.title %>" style="width:100%;margin-top:8px" title="Copy a viewer link (no host powers)">🔗 Copy invite link</button>
+            <% } %>
+            <% const files = e.files || []; %>
+            <% const isUploader = (f) => userName !== 'Guest' && (((f.uploadedBy || e.host) || 'Guest') === userName); %>
+            <div class="files-block">
+              <p class="files-title">📎 Files to screen · <%= files.length %></p>
+              <% if (files.length) { %>
+                <ul class="file-list">
+                  <% files.forEach(f => { %>
+                    <li>
+                      <span class="file-icon sm" role="img" aria-label="File"><%= fileIcon(f) %></span>
+                      <% if (isUploader(f)) { %>
+                        <span class="file-name" title="<%= f.originalName %> (uploaded by you)"><%= f.originalName %></span>
+                      <% } else { %>
+                        <a class="file-name" title="<%= f.originalName %> — click to preview" href="/uploads/<%= encodeURIComponent(f.storedName) %>" target="_blank" rel="noopener"><%= f.originalName %></a>
+                      <% } %>
+                      <span class="file-size"><%= f.size > 1048576 ? (f.size/1048576).toFixed(1)+' MB' : Math.max(1, Math.round(f.size/1024))+' KB' %></span>
+                      <span class="type-tag" title="Document type: <%= fileType(f) %><% if (isUploader(f)) { %> · uploaded by you<% } %>"><%= fileType(f) %></span>
+                      <% if (!isUploader(f)) { %>
+                        <a class="file-save" href="/events/<%= e.id %>/files/<%= f.id %>" download title="Save <%= f.originalName %> to your device">⬇ Save</a>
+                      <% } %>
+                      <% if (mine || isUploader(f)) { %>
+                        <form method="POST" class="needs-confirm" style="display:inline" data-confirm-title="Remove this file?" data-confirm-text="Remove <%= f.originalName %> from <%= e.title %>?" data-confirm-yes="Remove" action="/events/<%= e.id %>/files/<%= f.id %>/remove?name=<%= encodeURIComponent(userName) %><% if (typeof hostKeyOf !== 'undefined' && hostKeyOf[e.id]) { %>&hostKey=<%= encodeURIComponent(hostKeyOf[e.id]) %><% } %>&returnTo=<%= encodeURIComponent('/lobby?name=' + encodeURIComponent(userName) + ((typeof hostKeyOf !== 'undefined' && hostKeyOf[e.id]) ? '&hostKey=' + encodeURIComponent(hostKeyOf[e.id]) : '')) %>">
+                          <button type="submit" class="file-remove" title="Remove <%= f.originalName %>">✕</button>
+                        </form>
+                      <% } %>
+                    </li>
+                  <% }) %>
+                </ul>
+              <% } else { %>
+                <p class="no-files">No screening files yet — be the first to add one below.</p>
+              <% } %>
+              <details class="add-file">
+                <summary>＋ Add screening file</summary>
+                <form method="POST" action="/events/<%= e.id %>/files?name=<%= encodeURIComponent(userName) %>&returnTo=<%= encodeURIComponent('/lobby?name=' + encodeURIComponent(userName) + ((typeof hostKeyOf !== 'undefined' && hostKeyOf[e.id]) ? '&hostKey=' + encodeURIComponent(hostKeyOf[e.id]) : '')) %>" enctype="multipart/form-data">
+                  <input type="file" name="screenFiles" multiple aria-label="Upload screening files for <%= e.title %>">
+                  <button type="submit" class="secondary" style="width:100%;margin-top:8px">⬆ Upload to this event</button>
+                </form>
+              </details>
+            </div>
+            <% if (typeof hostOf !== 'undefined' ? hostOf[e.id] : (e.custom && e.host === userName)) { %>
+              <form class="needs-confirm" data-confirm-title="Cancel this event?" data-confirm-text="Cancel <%= e.title %>? Its files will be removed too." data-confirm-yes="Yes, cancel" method="POST" action="/events/<%= e.id %>/cancel?name=<%= encodeURIComponent(userName) %><% if (typeof hostKeyOf !== 'undefined' && hostKeyOf[e.id]) { %>&hostKey=<%= encodeURIComponent(hostKeyOf[e.id]) %><% } %>">
+                <button type="submit" class="btn-danger" style="width:100%">Cancel event</button>
+              </form>
+            <% } %>
+          </article>
+        <% }) %>
+      </section>
+
+      <div class="panel">
+        <h2>✨ Create event</h2>
+        <p class="sub">Publish a new slot to the schedule above. You'll get a private host link with presenter controls.</p>
+        <form id="createForm" method="POST" action="/events?name=<%= encodeURIComponent(userName) %>" enctype="multipart/form-data">
+          <div class="row">
+            <input name="title" type="text" maxlength="60" placeholder="Event title — e.g. Sprint Retro" required style="flex:2" aria-label="Event title">
+            <input name="roomId" type="text" maxlength="40" placeholder="Room ID (auto if blank)" style="flex:1" aria-label="Room ID" spellcheck="false">
+          </div>
+          <label class="field">📎 Files to screen <span class="hint">(optional — up to 5, 50 MB each. Attendees can save them from the event.)</span>
+            <input name="screenFiles" type="file" multiple aria-label="Upload files to screen in this event">
+          </label>
+          <div class="row">
+            <label class="field" style="flex:1">Starts in
+              <div class="row" style="margin-top:0">
+                <input name="startsInValue" type="number" min="1" max="365" value="30" title="Starts in value" aria-label="Event starts in, value" style="flex:1">
+                <select name="startsInUnit" aria-label="Start time unit" style="flex:1">
+                  <option value="minutes" selected>Minutes</option>
+                  <option value="hours">Hours</option>
+                  <option value="days">Days</option>
+                </select>
+              </div>
+            </label>
+            <label class="field" style="flex:1">Duration (min)
+              <input name="durationMin" type="number" min="5" max="240" value="30" title="Duration (minutes)" aria-label="Event duration, minutes">
+            </label>
+            <button type="submit" style="align-self:end">＋ Create event</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>🔑 Join by ID</h2>
+        <p class="sub">Know the room ID? Enter it directly.</p>
+        <form id="customForm" class="row">
+          <input id="customRoom" type="text" placeholder="e.g. team-standup" aria-label="Custom room ID" spellcheck="false">
+          <button type="submit">Join room </button>
+        </form>
+      </div>
+    </div>
+    <p class="foot">Have a productive discussion</p>
+  </main>
+  <script>
+    document.getElementById('tz').textContent =
+      Intl.DateTimeFormat().resolvedOptions().timeZone;
+    document.querySelectorAll('time[data-utc]').forEach(el => {
+      const d = new Date(el.dataset.utc);
+      el.textContent = d.toLocaleString(undefined, {
+        weekday: 'short', hour: 'numeric', minute: '2-digit'
+      });
+      el.title = d.toISOString();
+    });
+    const USER = <%- JSON.stringify(userName).replace(/</g, '\\u003c') %>;
+    document.getElementById('customForm').onsubmit = e => {
+      e.preventDefault();
+      const room = document.getElementById('customRoom').value.trim();
+      if (!room) return;
+      window.location.href = '/' + encodeURIComponent(room) + '?name=' + encodeURIComponent(USER);
+    };
+
+    // ---- Share links: viewer invite URLs carry NO hostKey, so guests can
+    // never drive the preview. Absolute URL built client-side so it matches
+    // whatever origin (localhost / ngrok) the host is actually on. ----
+    function viewerLink(roomId) { return location.origin + '/' + encodeURIComponent(roomId) + '?guest=1'; }
+    async function copyText(text, statusEl, okMsg) {
+      try {
+        await navigator.clipboard.writeText(text);
+        if (statusEl) statusEl.textContent = okMsg || 'Link copied — send it to your guests.';
+        return true;
+      } catch {
+        // Fallback for non-secure contexts: select + execCommand
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          document.body.append(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+          if (statusEl) statusEl.textContent = okMsg || 'Link copied — send it to your guests.';
+          return true;
+        } catch {
+          if (statusEl) statusEl.textContent = 'Copy failed — long-press the link to copy it manually.';
+          return false;
+        }
+      }
+    }
+    // New-event banner
+    (function () {
+      const banner = document.querySelector('.share-banner');
+      if (!banner) return;
+      const roomId = banner.dataset.room;
+      const link = viewerLink(roomId);
+      const input = document.getElementById('shareLink');
+      const status = document.getElementById('copyStatus');
+      if (input) {
+        input.value = link;
+        input.addEventListener('focus', () => input.select());
+        input.addEventListener('click', () => input.select());
+      }
+      const copyBtn = document.getElementById('copyShare');
+      if (copyBtn) copyBtn.onclick = () => copyText(link, status, '✓ Viewer link copied — send it to your guests.');
+      const shareBtn = document.getElementById('nativeShare');
+      if (shareBtn) {
+        if (!navigator.share) shareBtn.style.display = 'none';
+        shareBtn.onclick = async () => {
+          try { await navigator.share({ title: 'Join my MiniZoom event', text: 'Join my video event:', url: link }); }
+          catch { /* user cancelled — ignore */ }
+        };
+      }
+    })();
+    // Per-event invite buttons (available any time, not just after creation)
+    document.querySelectorAll('.copy-invite').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const link = viewerLink(btn.dataset.room);
+        const orig = btn.textContent;
+        const ok = await copyText(link, null);
+        btn.textContent = ok ? '✓ Copied!' : 'Copy failed';
+        setTimeout(() => { btn.textContent = orig; }, 1800);
+      });
+    });
+
+    // ---- Minimal in-app confirm dialog (cancel event / remove file) ----
+    (function () {
+      const backdrop = document.getElementById('confirmBackdrop');
+      if (!backdrop) return;
+      const titleEl = document.getElementById('confirmTitle');
+      const textEl = document.getElementById('confirmText');
+      const yesBtn = document.getElementById('confirmYes');
+      const noBtn = document.getElementById('confirmNo');
+      let pending = null;
+      const close = () => { backdrop.hidden = true; pending = null; };
+      noBtn.addEventListener('click', close);
+      backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && !backdrop.hidden) close(); });
+      document.querySelectorAll('form.needs-confirm').forEach(f => {
+        f.addEventListener('submit', e => {
+          e.preventDefault();
+          titleEl.textContent = f.dataset.confirmTitle || 'Are you sure?';
+          textEl.textContent = f.dataset.confirmText || '';
+          yesBtn.textContent = f.dataset.confirmYes || 'Confirm';
+          pending = f;
+          backdrop.hidden = false;
+          yesBtn.focus();
+        });
+      });
+      yesBtn.addEventListener('click', () => { if (pending) pending.submit(); });
+    })();
+  </script>
+  <div class="modal-backdrop" id="confirmBackdrop" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle"></h2>
+      <p class="sub" id="confirmText"></p>
+      <div class="row">
+        <button type="button" class="secondary" id="confirmNo">Keep</button>
+        <button type="button" class="btn-danger" id="confirmYes">Confirm</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
