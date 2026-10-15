@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: Rebuild and redeploy even if this upstream commit is already built
+        description: Build and deploy even if this upstream commit was already attempted
         type: boolean
         default: false
 
@@ -22,71 +22,48 @@ concurrency:
 env:
   UPSTREAM: bertha-hallo/PeerMeet
   UPSTREAM_BRANCH: main
-  IMAGE: ghcr.io/rigelis-inc/peermeet
 
 jobs:
-  # Pins the upstream commit for this run and decides whether it still needs building.
+  # Pins the upstream commit for this run and records that it was attempted, so a commit that
+  # fails to build or deploy is not retried every poll. Use `force` to retry it.
   resolve:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: read
-      packages: read
+      contents: write
     outputs:
       sha: ${{ steps.pin.outputs.sha }}
-      tag: ${{ steps.pin.outputs.tag }}
       skip: ${{ steps.pin.outputs.skip }}
     steps:
       - name: Pin upstream commit
         id: pin
         env:
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE: ${{ inputs.force }}
         run: |
           sha=$(git ls-remote "https://github.com/${UPSTREAM}.git" "refs/heads/${UPSTREAM_BRANCH}" | cut -f1)
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve upstream HEAD: '$sha'"; exit 1; }
-          # Tag carries both the upstream commit and the tooling commit, so either change produces a new image.
-          tag="build-${sha::12}-${GITHUB_SHA::12}"
+          mark="seen-${sha::12}-${GITHUB_SHA::12}"
           skip=false
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$FORCE" != true ]; then
-            echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
-            if docker manifest inspect "$IMAGE:$tag" >/dev/null 2>&1; then skip=true; fi
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            seen=$(git ls-remote --tags "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${mark}" | wc -l)
+            if [ "$seen" -gt 0 ] && [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$FORCE" != true ]; then
+              skip=true
+            elif [ "$seen" -eq 0 ]; then
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${mark}" -f sha="$GITHUB_SHA" >/dev/null
+            fi
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
-          echo "upstream=$sha tag=$tag skip=$skip"
+          echo "upstream=$sha mark=$mark skip=$skip"
 
-  # Pull requests: build the current upstream with the proposed tooling. No registry write, no secrets.
+  # Builds the pinned upstream commit with this repo's Dockerfile and smoke-tests it.
+  # Pull requests stop here; on main the server then builds the same commits itself.
   test:
     needs: resolve
-    if: github.event_name == 'pull_request'
+    if: needs.resolve.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ env.UPSTREAM }}
-          ref: ${{ needs.resolve.outputs.sha }}
-          path: app
-          persist-credentials: false
-      - name: Build
-        run: docker build -f Dockerfile -t peermeet:ci app
-      - name: Smoke test
-        run: bash .github/scripts/smoke.sh peermeet:ci
-
-  # Dispatches (from the poller or by hand) and tooling pushes on main: build the pinned upstream commit and publish it.
-  publish:
-    needs: resolve
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.resolve.outputs.skip != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -97,6 +74,9 @@ jobs:
           fetch-depth: 20
           persist-credentials: false
       - name: Show what is being shipped
+        if: github.event_name != 'pull_request'
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           {
             echo "### Upstream commit being deployed"
@@ -111,34 +91,20 @@ jobs:
             git -C app show --stat --format= "$SHA" | tail -n 25
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
       - name: Build
         run: docker build -f Dockerfile -t peermeet:ci app
       - name: Smoke test
         run: bash .github/scripts/smoke.sh peermeet:ci
-      - name: Push to GHCR
-        id: push
-        env:
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.resolve.outputs.tag }}
-        run: |
-          echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker tag peermeet:ci "$IMAGE:$TAG"
-          docker push "$IMAGE:$TAG"
-          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG")
-          echo "digest=${ref##*@}" >> "$GITHUB_OUTPUT"
-          echo "Published $ref"
 
-  # Deploys automatically once the smoke test has passed. The `production` environment only holds the
-  # SSH secret and limits it to `main`. The server pulls the image by digest, so a tag can't be swapped
-  # underneath it, and rolls back if the new container doesn't become healthy.
+  # Deploys automatically once the smoke test has passed. The restricted SSH key can only run the
+  # server's deploy script, which takes these two commit SHAs, builds them on the server, and rolls
+  # back if the new container does not become healthy.
   deploy:
-    needs: publish
+    needs: [resolve, test]
     # Off until the server side is set up; flip with: gh variable set PEERMEET_ENABLED --body true
-    if: vars.PEERMEET_ENABLED == 'true'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.resolve.outputs.skip != 'true' && vars.PEERMEET_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     environment: production
     steps:
       - name: Deploy over restricted SSH
@@ -146,12 +112,12 @@ jobs:
           SSH_KEY: ${{ secrets.PEERMEET_SSH_KEY }}
           SSH_HOST: ${{ vars.PEERMEET_HOST }}
           KNOWN_HOSTS: ${{ vars.PEERMEET_KNOWN_HOSTS }}
-          DIGEST: ${{ needs.publish.outputs.digest }}
+          UPSTREAM_SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          # The server-side key is locked to one forced command; the argument is the image digest.
+          # The server-side key is locked to one forced command; the argument is "<app sha> <tooling sha>".
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            "peermeet@${SSH_HOST}" "$DIGEST"
+            "peermeet@${SSH_HOST}" "${UPSTREAM_SHA} ${GITHUB_SHA}"
