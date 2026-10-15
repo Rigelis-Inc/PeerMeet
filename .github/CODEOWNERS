@@ -1,6 +1,2 @@
-# Anything that can change what runs on the production server needs owner review.
-/.github/        @griffin919
-/Dockerfile      @griffin919
-/.dockerignore   @griffin919
-/package.json    @griffin919
-/package-lock.json @griffin919
+# This repo only holds deploy tooling for bertha-hallo/PeerMeet. Everything here decides what runs in production.
+*  @griffin919

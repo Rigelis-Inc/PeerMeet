@@ -1,0 +1,39 @@
+name: poll-upstream
+
+# Watches bertha-hallo/PeerMeet and starts ci-deploy when its main has a commit that is not built yet.
+# Kept separate from ci-deploy so idle polls never queue behind (or replace) a real build.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+  actions: write
+
+env:
+  UPSTREAM: bertha-hallo/PeerMeet
+  UPSTREAM_BRANCH: main
+  IMAGE: ghcr.io/rigelis-inc/peermeet
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch a build if upstream has something new
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha=$(git ls-remote "https://github.com/${UPSTREAM}.git" "refs/heads/${UPSTREAM_BRANCH}" | cut -f1)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve upstream HEAD: '$sha'"; exit 1; }
+          # Must match the tag ci-deploy computes: upstream commit + this tooling commit.
+          tag="build-${sha::12}-${GITHUB_SHA::12}"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          if docker manifest inspect "$IMAGE:$tag" >/dev/null 2>&1; then
+            echo "up to date: $tag"
+          else
+            echo "new upstream commit ${sha::12}; starting ci-deploy"
+            gh workflow run ci-deploy.yml --repo "$GITHUB_REPOSITORY" --ref main
+          fi
