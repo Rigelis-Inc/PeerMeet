@@ -1,0 +1,10 @@
+node_modules
+uploads
+data
+.git
+.github
+.gitignore
+.dockerignore
+Dockerfile
+pnpm-lock.yaml
+*.md
