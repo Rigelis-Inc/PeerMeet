@@ -4,7 +4,7 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "docker build -t peermeet:test . && bash .github/scripts/smoke.sh peermeet:test",
     "start": "node server.js"
   },
   "keywords": [],

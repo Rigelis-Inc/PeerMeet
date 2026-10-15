@@ -1,0 +1,82 @@
+name: ci-deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/rigelis-inc/peermeet
+
+jobs:
+  # Pull requests: build + smoke test only. No registry write, no secrets.
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t peermeet:ci .
+      - name: Smoke test
+        run: bash .github/scripts/smoke.sh peermeet:ci
+
+  # main: build, smoke test, publish an immutable image digest.
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t peermeet:ci .
+      - name: Smoke test
+        run: bash .github/scripts/smoke.sh peermeet:ci
+      - name: Push to GHCR
+        id: push
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          tag="sha-${GITHUB_SHA::12}"
+          docker tag peermeet:ci "$IMAGE:$tag"
+          docker push "$IMAGE:$tag"
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$tag")
+          echo "digest=${ref##*@}" >> "$GITHUB_OUTPUT"
+          echo "Published $ref"
+
+  # Waits for approval on the `production` Environment (required reviewer).
+  # The server pulls the image by digest, so a tag can't be swapped underneath it.
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Deploy over restricted SSH
+        env:
+          SSH_KEY: ${{ secrets.PEERMEET_SSH_KEY }}
+          SSH_HOST: ${{ vars.PEERMEET_HOST }}
+          KNOWN_HOSTS: ${{ vars.PEERMEET_KNOWN_HOSTS }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The server-side key is locked to one forced command; the argument is the image digest.
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "peermeet@${SSH_HOST}" "$DIGEST"
